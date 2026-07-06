@@ -9,11 +9,14 @@ import type {
 } from '../../src/core/types';
 import {
   defaultEffects,
+  defaultParagraph,
   defaultTextBody,
   defaultTransform,
   defaultTransition,
   noLine,
+  paragraphOf,
   textBodyOf,
+  textRun,
 } from '../../src/core/defaults';
 
 let counter = 0;
@@ -390,73 +393,38 @@ describe('autoAdvanceDelay / notesForCurrent', () => {
   });
 
   it('concatenates note paragraphs with newlines', () => {
-    const notes = textBodyOf('First line');
-    notes.paragraphs.push(
-      {
-        ...notes.paragraphs[0],
-        children: [
-          { type: 'run', text: 'Second ', font: notes.paragraphs[0].children[0] as never },
-          { type: 'run', text: 'line', font: notes.paragraphs[0].children[0] as never },
+    const slide = makeSlide('s1', {
+      notes: defaultTextBody({
+        paragraphs: [
+          paragraphOf('First line'),
+          defaultParagraph({ children: [textRun('Second '), textRun('line')] }),
         ],
-      },
-    );
-    const slide = makeSlide('s1', { notes: textBodyOf('') });
-    slide.notes = {
-      ...defaultTextBody(),
-      paragraphs: [
-        {
-          children: [{ type: 'run', text: 'First line', font: undefined as never }],
-          align: 'left',
-          level: 0,
-          bullet: { type: 'none' },
-          lineSpacing: 1,
-          spaceBefore: 0,
-          spaceAfter: 0,
-          indent: 0,
-        },
-        {
-          children: [
-            { type: 'run', text: 'Second ', font: undefined as never },
-            { type: 'run', text: 'line', font: undefined as never },
-          ],
-          align: 'left',
-          level: 0,
-          bullet: { type: 'none' },
-          lineSpacing: 1,
-          spaceBefore: 0,
-          spaceAfter: 0,
-          indent: 0,
-        },
-      ],
-    };
+      }),
+    });
     const show = new SlideshowController(makePresentation([slide]));
     show.start();
     expect(show.notesForCurrent()).toBe('First line\nSecond line');
   });
 
   it('renders explicit line breaks in notes as newlines', () => {
-    const slide = makeSlide('s1');
-    slide.notes = {
-      ...defaultTextBody(),
-      paragraphs: [
-        {
-          children: [
-            { type: 'run', text: 'Before', font: undefined as never },
-            { type: 'break' },
-            { type: 'run', text: 'After', font: undefined as never },
-          ],
-          align: 'left',
-          level: 0,
-          bullet: { type: 'none' },
-          lineSpacing: 1,
-          spaceBefore: 0,
-          spaceAfter: 0,
-          indent: 0,
-        },
-      ],
-    };
+    const slide = makeSlide('s1', {
+      notes: defaultTextBody({
+        paragraphs: [
+          defaultParagraph({
+            children: [textRun('Before'), { type: 'break' }, textRun('After')],
+          }),
+        ],
+      }),
+    });
     const show = new SlideshowController(makePresentation([slide]));
     show.start();
     expect(show.notesForCurrent()).toBe('Before\nAfter');
+  });
+
+  it('returns the plain text of a simple textBodyOf note', () => {
+    const slide = makeSlide('s1', { notes: textBodyOf('Remember to smile') });
+    const show = new SlideshowController(makePresentation([slide]));
+    show.start();
+    expect(show.notesForCurrent()).toBe('Remember to smile');
   });
 });

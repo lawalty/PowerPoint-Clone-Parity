@@ -197,6 +197,7 @@ describe('ops integration', () => {
 
     while (h.canRedo) h.redo();
     expect(pres.slides[1]).toBe(slide1);
-    expect(slide1.elements.map((el) => el.name)).toEqual(['b', 'a-copy']);
+    // 'a' was duplicated (clone keeps the name) then the original deleted.
+    expect(slide1.elements.map((el) => el.name)).toEqual(['b', 'a']);
   });
 });

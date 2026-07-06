@@ -115,7 +115,7 @@ export class History {
 
   get redoLabel(): string | null {
     const top = this.redoStack[this.redoStack.length - 1];
-    return top ? top.cmd.label : null;
+    return top ? top.label : null;
   }
 
   clear(): void {
