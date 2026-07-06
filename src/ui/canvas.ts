@@ -11,10 +11,13 @@
  */
 
 import type { Id, Point, SlideElement, Transform } from '../core/types';
+import { radToDeg } from '../core/util';
 import {
   elementsInRect,
   findElementById,
+  normalizeAngle,
   resizeElement,
+  snapValue,
   type ResizeAnchor,
 } from '../shapes';
 import type { EditorState } from './state';
@@ -83,12 +86,31 @@ interface MarqueeInteraction {
   rectDiv: HTMLDivElement;
 }
 
-type Interaction = MoveInteraction | ResizeInteraction | MarqueeInteraction;
+interface RotateInteraction {
+  kind: 'rotate';
+  start: Point;
+  last: Point;
+  elementId: Id;
+  center: Point;
+  originalRotation: number;
+}
+
+type Interaction = MoveInteraction | ResizeInteraction | MarqueeInteraction | RotateInteraction;
+
+/** Angle (deg, clockwise from 12 o'clock) of the pointer around a center. */
+function pointerAngle(center: Point, point: Point): number {
+  return normalizeAngle(radToDeg(Math.atan2(point.y - center.y, point.x - center.x)) + 90);
+}
 
 const DRAG_THRESHOLD = 3;
 
 export class Canvas {
   readonly el: HTMLElement;
+
+  /** Grid size in points for move snapping; 0 disables snapping. */
+  gridSize = 0;
+  /** Only snap when within this distance of a grid line (points). */
+  snapThreshold = Infinity;
 
   private readonly state: EditorState;
   private readonly unsubs: (() => void)[] = [];
@@ -100,10 +122,12 @@ export class Canvas {
     this.el.className = 'editor-canvas';
     this.el.style.position = 'relative';
     this.el.style.overflow = 'hidden';
+    this.el.tabIndex = 0;
 
     this.el.addEventListener('mousedown', this.onMouseDown);
     this.el.addEventListener('mousemove', this.onMouseMove);
     this.el.addEventListener('mouseup', this.onMouseUp);
+    this.el.addEventListener('keydown', this.onKeyDown);
 
     for (const event of ['document', 'slide', 'selection', 'view'] as const) {
       this.unsubs.push(state.on(event, () => this.render()));
@@ -119,6 +143,7 @@ export class Canvas {
     this.el.removeEventListener('mousedown', this.onMouseDown);
     this.el.removeEventListener('mousemove', this.onMouseMove);
     this.el.removeEventListener('mouseup', this.onMouseUp);
+    this.el.removeEventListener('keydown', this.onKeyDown);
     this.el.remove();
   }
 
@@ -152,6 +177,10 @@ export class Canvas {
       handle.dataset.handle = name;
       div.appendChild(handle);
     }
+    const rotate = document.createElement('div');
+    rotate.className = 'rotate-handle';
+    rotate.dataset.handle = 'rotate';
+    div.appendChild(rotate);
   }
 
   /** Sync existing element divs' geometry from the model (live drag preview). */
@@ -184,6 +213,26 @@ export class Canvas {
     const point = this.toSlidePoint(event);
     const target = event.target as HTMLElement | null;
 
+    // 0. Rotate handle?
+    const rotateDiv = target?.closest('.rotate-handle') as HTMLElement | null;
+    if (rotateDiv) {
+      const elementDiv = rotateDiv.closest('[data-element-id]') as HTMLElement | null;
+      const id = elementDiv?.dataset.elementId;
+      const element = id ? findElementById(slide.elements, id) : undefined;
+      if (element && !element.locked) {
+        const t = element.transform;
+        this.interaction = {
+          kind: 'rotate',
+          start: point,
+          last: point,
+          elementId: element.id,
+          center: { x: t.x + t.width / 2, y: t.y + t.height / 2 },
+          originalRotation: t.rotation,
+        };
+      }
+      return;
+    }
+
     // 1. Resize handle?
     const handleDiv = target?.closest('.resize-handle') as HTMLElement | null;
     if (handleDiv) {
@@ -215,7 +264,8 @@ export class Canvas {
       }
       const id = top.dataset.elementId as Id;
       if (event.shiftKey) {
-        this.state.addToSelection(id);
+        this.state.toggleInSelection(id);
+        if (!this.state.selection.elementIds.includes(id)) return;
       } else if (!this.state.selection.elementIds.includes(id)) {
         this.state.selectElements([id]);
       }
@@ -250,14 +300,21 @@ export class Canvas {
     const dy = point.y - interaction.start.y;
 
     if (interaction.kind === 'move') {
+      const snapped = this.snappedDelta(interaction.originals, dx, dy);
       for (const [id, orig] of interaction.originals) {
         const element = findElementById(slide.elements, id);
         if (element) {
-          element.transform.x = orig.x + dx;
-          element.transform.y = orig.y + dy;
+          element.transform.x = orig.x + snapped.dx;
+          element.transform.y = orig.y + snapped.dy;
         }
       }
       this.syncTransforms();
+    } else if (interaction.kind === 'rotate') {
+      const element = findElementById(slide.elements, interaction.elementId);
+      if (element) {
+        element.transform.rotation = pointerAngle(interaction.center, point);
+        this.syncTransforms();
+      }
     } else if (interaction.kind === 'resize') {
       const element = findElementById(slide.elements, interaction.elementId);
       if (element) {
@@ -293,8 +350,20 @@ export class Canvas {
           element.transform.y = orig.y;
         }
       }
+      const snapped = this.snappedDelta(interaction.originals, dx, dy);
+      if (snapped.dx !== 0 || snapped.dy !== 0) {
+        this.state.translateSelection(snapped.dx, snapped.dy);
+      } else {
+        this.render();
+      }
+      return;
+    }
+
+    if (interaction.kind === 'rotate') {
+      const element = findElementById(slide.elements, interaction.elementId);
+      if (element) element.transform.rotation = interaction.originalRotation;
       if (dx !== 0 || dy !== 0) {
-        this.state.translateSelection(dx, dy);
+        this.state.setRotationOf(interaction.elementId, pointerAngle(interaction.center, point));
       } else {
         this.render();
       }
@@ -332,6 +401,60 @@ export class Canvas {
     };
     const hits = elementsInRect(slide.elements, rect);
     this.state.selectElements(hits.map((el) => el.id));
+  };
+
+  /** Adjust a move delta so the primary element lands on the grid. */
+  private snappedDelta(
+    originals: Map<Id, { x: number; y: number }>,
+    dx: number,
+    dy: number,
+  ): { dx: number; dy: number } {
+    if (this.gridSize <= 0) return { dx, dy };
+    const first = originals.values().next().value as { x: number; y: number } | undefined;
+    if (!first) return { dx, dy };
+    return {
+      dx: snapValue(first.x + dx, this.gridSize, this.snapThreshold) - first.x,
+      dy: snapValue(first.y + dy, this.gridSize, this.snapThreshold) - first.y,
+    };
+  }
+
+  /** Abort the in-progress mouse interaction and restore the model. */
+  cancelInteraction(): void {
+    const interaction = this.interaction;
+    if (!interaction) return;
+    this.interaction = null;
+    const slide = this.state.currentSlide();
+    if (slide) {
+      if (interaction.kind === 'move') {
+        for (const [id, orig] of interaction.originals) {
+          const element = findElementById(slide.elements, id);
+          if (element) {
+            element.transform.x = orig.x;
+            element.transform.y = orig.y;
+          }
+        }
+      } else if (interaction.kind === 'resize') {
+        const element = findElementById(slide.elements, interaction.elementId);
+        if (element) this.restoreTransform(element, interaction.original);
+      } else if (interaction.kind === 'rotate') {
+        const element = findElementById(slide.elements, interaction.elementId);
+        if (element) element.transform.rotation = interaction.originalRotation;
+      } else {
+        interaction.rectDiv.remove();
+      }
+    }
+    this.render();
+  }
+
+  private readonly onKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === 'Escape') {
+      if (this.interaction) this.cancelInteraction();
+      else this.state.clearSelection();
+      event.preventDefault();
+    } else if (event.key === 'Delete' || event.key === 'Backspace') {
+      this.state.deleteSelection();
+      event.preventDefault();
+    }
   };
 
   private restoreTransform(element: SlideElement, original: Transform): void {

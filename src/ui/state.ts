@@ -14,14 +14,22 @@
  */
 
 import type {
+  Animation,
+  AnimationCategory,
+  AnimationEffect,
+  BulletNumbered,
   ChartKind,
+  Color,
   EditorSelection,
+  Fill,
   Id,
+  LineStyle,
   Presentation,
   ShapeGeometry,
   Slide,
   SlideElement,
   TextAlign,
+  TextBody,
   Transition,
   ViewMode,
 } from '../core/types';
@@ -35,6 +43,8 @@ import {
   getVisibleSlides,
   getLayout,
   setSlideHidden,
+  getNotesText,
+  setNotesText,
   serializePresentation,
   deserializePresentation,
 } from '../model';
@@ -45,6 +55,7 @@ import {
   createLine,
   moveElement,
   resizeElement,
+  setRotation,
   groupElements,
   ungroup,
   alignElements,
@@ -62,7 +73,11 @@ import {
 } from '../shapes';
 import {
   toggleFormat,
+  applyCharFormat,
+  rangeHasUniformFormat,
   setAlignment,
+  toggleBulletList,
+  toggleNumberedList,
   endOfBody,
   findInBodies,
   replaceInBody,
@@ -72,7 +87,12 @@ import {
 } from '../text';
 import { builtInThemes, applyTheme } from '../style';
 import { History, Clipboard, slideMutation, presentationMutation } from '../commands';
-import { setTransition } from '../animation';
+import {
+  setTransition,
+  addAnimation,
+  removeAnimation,
+  type AddAnimationOptions,
+} from '../animation';
 import { SlideshowController, type SlideshowOptions } from '../slideshow';
 import { createTable } from '../tables';
 import { createChart } from '../charts';
@@ -171,6 +191,16 @@ export class EditorState {
     this.selection = {
       slideId: this.currentSlideId || null,
       elementIds: [...this.selection.elementIds, id],
+    };
+    this.emit('selection');
+  }
+
+  /** Add the id when not selected, remove it when it already is. */
+  toggleInSelection(id: Id): void {
+    const ids = this.selection.elementIds;
+    this.selection = {
+      slideId: this.currentSlideId || null,
+      elementIds: ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id],
     };
     this.emit('selection');
   }
@@ -395,18 +425,115 @@ export class EditorState {
     this.emit('document');
   }
 
+  /** Set one element's rotation (degrees): one undo step. */
+  setRotationOf(id: Id, degrees: number): void {
+    if (!this.currentSlide()) return;
+    this.history.run(
+      slideMutation(this.presentation, this.currentSlideId, 'Rotate', (slide) => {
+        const el = findElementById(slide.elements, id);
+        if (el && !el.locked) setRotation(el, degrees);
+      }),
+    );
+    this.emit('document');
+  }
+
   // --- Text formatting ------------------------------------------------------------
 
-  /** Toggle bold/italic/underline across the whole text body of the selection. */
-  applyTextFormat(key: TextToggleKey): void {
+  /** Run `fn` over the text body of every selected shape/textbox: one undo step. */
+  private mutateSelectedBodies(label: string, fn: (body: TextBody) => void): void {
     const ids = [...this.selection.elementIds];
     if (ids.length === 0 || !this.currentSlide()) return;
     this.history.run(
-      slideMutation(this.presentation, this.currentSlideId, 'Format Text', (slide) => {
+      slideMutation(this.presentation, this.currentSlideId, label, (slide) => {
         for (const id of ids) {
           const el = findElementById(slide.elements, id);
-          if (el && (el.type === 'shape' || el.type === 'textbox')) {
-            toggleFormat(el.textBody, { paragraphIndex: 0, offset: 0 }, endOfBody(el.textBody), key);
+          if (el && (el.type === 'shape' || el.type === 'textbox')) fn(el.textBody);
+        }
+      }),
+    );
+    this.emit('document');
+  }
+
+  /** Toggle bold/italic/underline across the whole text body of the selection. */
+  applyTextFormat(key: TextToggleKey): void {
+    this.mutateSelectedBodies('Format Text', (body) => {
+      toggleFormat(body, { paragraphIndex: 0, offset: 0 }, endOfBody(body), key);
+    });
+  }
+
+  /**
+   * True when every selected text-bearing element has the format on across
+   * its whole body (drives toolbar toggle-button pressed state).
+   */
+  selectionHasFormat(key: TextToggleKey): boolean {
+    const els = this.selectedElements().filter(
+      (el) => el.type === 'shape' || el.type === 'textbox',
+    );
+    if (els.length === 0) return false;
+    return els.every(
+      (el) =>
+        (el.type === 'shape' || el.type === 'textbox') &&
+        rangeHasUniformFormat(
+          el.textBody,
+          { paragraphIndex: 0, offset: 0 },
+          endOfBody(el.textBody),
+          key,
+        ) === true,
+    );
+  }
+
+  /** Set paragraph alignment across the whole text body of the selection. */
+  setTextAlignment(align: TextAlign): void {
+    this.mutateSelectedBodies('Align Text', (body) => {
+      setAlignment(body, 0, body.paragraphs.length - 1, align);
+    });
+  }
+
+  setFontSize(size: number): void {
+    if (!Number.isFinite(size) || size <= 0) return;
+    this.mutateSelectedBodies('Font Size', (body) => {
+      applyCharFormat(body, { paragraphIndex: 0, offset: 0 }, endOfBody(body), { size });
+    });
+  }
+
+  setFontColor(color: Color): void {
+    this.mutateSelectedBodies('Font Color', (body) => {
+      applyCharFormat(body, { paragraphIndex: 0, offset: 0 }, endOfBody(body), { color });
+    });
+  }
+
+  setFontFamily(family: string): void {
+    this.mutateSelectedBodies('Font', (body) => {
+      applyCharFormat(body, { paragraphIndex: 0, offset: 0 }, endOfBody(body), { family });
+    });
+  }
+
+  /** Toggle a char bullet on every paragraph of the selected text bodies. */
+  toggleBullets(char = '•'): void {
+    this.mutateSelectedBodies('Bullets', (body) => {
+      toggleBulletList(body, 0, body.paragraphs.length - 1, char);
+    });
+  }
+
+  /** Toggle a numbered list on every paragraph of the selected text bodies. */
+  toggleNumbering(format: BulletNumbered['format'] = 'arabicPeriod'): void {
+    this.mutateSelectedBodies('Numbering', (body) => {
+      toggleNumberedList(body, 0, body.paragraphs.length - 1, format);
+    });
+  }
+
+  // --- Fill & line styling -----------------------------------------------------------
+
+  /** Apply a fill to every selected fill-bearing element (shape/textbox/freeform). */
+  setFillForSelection(fill: Fill): void {
+    const ids = [...this.selection.elementIds];
+    if (ids.length === 0 || !this.currentSlide()) return;
+    this.history.run(
+      slideMutation(this.presentation, this.currentSlideId, 'Fill', (slide) => {
+        for (const id of ids) {
+          const el = findElementById(slide.elements, id);
+          if (el && (el.type === 'shape' || el.type === 'textbox' || el.type === 'freeform')) {
+            el.fill = structuredClone(fill);
           }
         }
       }),
@@ -414,16 +541,16 @@ export class EditorState {
     this.emit('document');
   }
 
-  /** Set paragraph alignment across the whole text body of the selection. */
-  setTextAlignment(align: TextAlign): void {
+  /** Patch the line style of every selected element that has one. */
+  setLineForSelection(patch: Partial<LineStyle>): void {
     const ids = [...this.selection.elementIds];
     if (ids.length === 0 || !this.currentSlide()) return;
     this.history.run(
-      slideMutation(this.presentation, this.currentSlideId, 'Align Text', (slide) => {
+      slideMutation(this.presentation, this.currentSlideId, 'Line', (slide) => {
         for (const id of ids) {
           const el = findElementById(slide.elements, id);
-          if (el && (el.type === 'shape' || el.type === 'textbox')) {
-            setAlignment(el.textBody, 0, el.textBody.paragraphs.length - 1, align);
+          if (el && 'line' in el) {
+            Object.assign(el.line, structuredClone(patch));
           }
         }
       }),
@@ -508,6 +635,20 @@ export class EditorState {
     if (from === -1) return;
     const to = direction === 'up' ? from - 1 : from + 1;
     if (to < 0 || to >= this.presentation.slides.length) return;
+    this.history.run(
+      presentationMutation(this.presentation, 'Move Slide', (pres) => {
+        moveSlide(pres, from, to);
+      }),
+    );
+    this.emit('document');
+  }
+
+  /** Move a slide to an absolute index (drag-reorder API). */
+  moveSlideTo(slideId: Id, toIndex: number): void {
+    const from = getSlideIndex(this.presentation, slideId);
+    if (from === -1) return;
+    const to = Math.max(0, Math.min(this.presentation.slides.length - 1, toIndex));
+    if (to === from) return;
     this.history.run(
       presentationMutation(this.presentation, 'Move Slide', (pres) => {
         moveSlide(pres, from, to);
@@ -610,6 +751,63 @@ export class EditorState {
     this.emit('document');
   }
 
+  // --- Animations ----------------------------------------------------------------------
+
+  /**
+   * Add an animation of the given category/effect targeting every selected
+   * element (one undo step). Returns the animations created.
+   */
+  addAnimationToSelection(
+    category: AnimationCategory,
+    effect: AnimationEffect,
+    opts: AddAnimationOptions = {},
+  ): Animation[] {
+    const ids = [...this.selection.elementIds];
+    if (ids.length === 0 || !this.currentSlide()) return [];
+    let created: Animation[] = [];
+    this.history.run(
+      slideMutation(this.presentation, this.currentSlideId, 'Add Animation', (slide) => {
+        created = ids.map((id) => addAnimation(slide, id, category, effect, opts));
+      }),
+    );
+    this.emit('document');
+    return created;
+  }
+
+  removeAnimationById(animId: Id): void {
+    const slide = this.currentSlide();
+    if (!slide || !slide.animations.some((a) => a.id === animId)) return;
+    this.history.run(
+      slideMutation(this.presentation, this.currentSlideId, 'Remove Animation', (s) => {
+        removeAnimation(s, animId);
+      }),
+    );
+    this.emit('document');
+  }
+
+  /** Animations on the current slide (play order). */
+  currentAnimations(): Animation[] {
+    return this.currentSlide()?.animations ?? [];
+  }
+
+  // --- Notes ------------------------------------------------------------------------------
+
+  notesTextForCurrent(): string {
+    if (!this.currentSlide()) return '';
+    return getNotesText(this.presentation, this.currentSlideId);
+  }
+
+  setNotesForCurrent(text: string): void {
+    if (!this.currentSlide()) return;
+    if (this.notesTextForCurrent() === text) return;
+    this.history.run(
+      slideMutation(this.presentation, this.currentSlideId, 'Edit Notes', () => {
+        setNotesText(this.presentation, this.currentSlideId, text);
+      }),
+    );
+    this.emit('document');
+  }
+
   // --- View / slideshow ---------------------------------------------------------------------
 
   setViewMode(mode: ViewMode): void {
@@ -635,6 +833,26 @@ export class EditorState {
     this.viewMode = 'reading';
     this.emit('view');
     return controller;
+  }
+
+  /** Advance the running show; ends it after stepping past the last slide. */
+  slideshowNext(): void {
+    const show = this.activeShow;
+    if (!show) return;
+    show.next();
+    if (show.finished) {
+      this.endSlideshow();
+      return;
+    }
+    this.emit('view');
+  }
+
+  /** Step the running show backwards. */
+  slideshowPrev(): void {
+    const show = this.activeShow;
+    if (!show) return;
+    show.prev();
+    this.emit('view');
   }
 
   endSlideshow(): void {

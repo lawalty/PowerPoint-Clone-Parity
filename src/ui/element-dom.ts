@@ -8,6 +8,46 @@ import type { ColorScheme, Presentation, Slide, SlideElement } from '../core/typ
 import { builtInThemes, gradientToCss, resolveFill } from '../style';
 import { getBodyText } from '../text';
 
+/** The slide's title text: title placeholder first, else first text found. */
+export function slideTitleText(slide: Slide): string {
+  let fallback = '';
+  for (const el of slide.elements) {
+    if (el.type !== 'shape' && el.type !== 'textbox') continue;
+    const text = getBodyText(el.textBody).trim();
+    if (!text) continue;
+    if (el.placeholder?.kind === 'title' || el.placeholder?.kind === 'centeredTitle') {
+      return text;
+    }
+    if (!fallback) fallback = text;
+  }
+  return fallback;
+}
+
+/** Non-title text blocks of a slide, for the outline view. */
+export function slideBodyTexts(slide: Slide): string[] {
+  const out: string[] = [];
+  let skippedTitle = false;
+  const hasTitlePlaceholder = slide.elements.some(
+    (el) =>
+      (el.type === 'shape' || el.type === 'textbox') &&
+      (el.placeholder?.kind === 'title' || el.placeholder?.kind === 'centeredTitle'),
+  );
+  for (const el of slide.elements) {
+    if (el.type !== 'shape' && el.type !== 'textbox') continue;
+    const text = getBodyText(el.textBody).trim();
+    if (!text) continue;
+    const isTitle = hasTitlePlaceholder
+      ? el.placeholder?.kind === 'title' || el.placeholder?.kind === 'centeredTitle'
+      : !skippedTitle;
+    if (isTitle) {
+      skippedTitle = true;
+      continue;
+    }
+    out.push(text);
+  }
+  return out;
+}
+
 /** Color scheme in effect for a slide (slide -> layout -> master -> theme). */
 export function schemeForSlide(pres: Presentation, slide: Slide): ColorScheme {
   const layout = pres.layouts.find((l) => l.id === slide.layoutId);
