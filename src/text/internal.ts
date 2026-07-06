@@ -193,7 +193,8 @@ export function forEachRunInRange(
     let pos = 0;
     for (const child of p.children) {
       const cEnd = pos + childLength(child);
-      if (child.type === 'run' && cEnd > s && pos < e) fn(child, pi);
+      // Require a non-empty overlap so collapsed ranges visit nothing.
+      if (child.type === 'run' && Math.min(cEnd, e) - Math.max(pos, s) > 0) fn(child, pi);
       pos = cEnd;
     }
   }

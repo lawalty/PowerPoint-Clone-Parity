@@ -19,7 +19,7 @@ export function applyParagraphFormat(
     for (const key of Object.keys(patch) as (keyof ParagraphFormatPatch)[]) {
       const value = patch[key];
       if (value === undefined) continue;
-      (p as Record<string, unknown>)[key] = value;
+      (p as unknown as Record<string, unknown>)[key] = value;
     }
   }
   return body;
