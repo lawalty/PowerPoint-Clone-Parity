@@ -47,7 +47,7 @@ export function replyToComment(
   now: () => number = Date.now,
 ): CommentReply {
   const slide = getSlide(pres, slideId);
-  const comment = getComment(pres, slide, commentId);
+  const comment = getComment(slide, commentId);
   const reply: CommentReply = { id: genId('reply'), author, text, createdAt: now() };
   comment.replies.push(reply);
   return reply;
@@ -56,7 +56,7 @@ export function replyToComment(
 /** Mark a comment resolved (or unresolved). */
 export function resolveComment(pres: Presentation, slideId: Id, commentId: Id, resolved = true): void {
   const slide = getSlide(pres, slideId);
-  getComment(pres, slide, commentId).resolved = resolved;
+  getComment(slide, commentId).resolved = resolved;
 }
 
 /** Edit the text of a comment, or of a reply when the id matches a reply. */
