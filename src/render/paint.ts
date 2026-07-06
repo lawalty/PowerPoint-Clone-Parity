@@ -4,8 +4,10 @@
  * and reference them via url(#id).
  */
 
-import type { Fill, LineStyle, Transform } from '../core/types';
+import type { ArrowheadKind, Effects, Fill, LineStyle, Transform } from '../core/types';
+import { degToRad } from '../core/util';
 import {
+  resolveColorToCss,
   resolveFill,
   resolveLine,
   type ResolvedGradientFill,
@@ -120,6 +122,70 @@ export function strokeAttrs(line: LineStyle, ctx: RenderContext): string {
     out += ' stroke-linecap="square"';
   }
   return out;
+}
+
+/**
+ * A ` filter="url(#id)"` attribute for the element's shadow (a gaussian-blur
+ * based drop shadow filter pushed into the defs), or '' when no shadow.
+ */
+export function shadowFilterAttr(effects: Effects, ctx: RenderContext): string {
+  const shadow = effects.shadow;
+  if (!shadow) {
+    return '';
+  }
+  const id = ctx.nextId('shadow');
+  const rad = degToRad(shadow.angle);
+  const dx = shadow.distance * Math.cos(rad);
+  const dy = shadow.distance * Math.sin(rad);
+  const color = resolveColorToCss(shadow.color, ctx.scheme);
+  ctx.defs.push(
+    `<filter id="${id}" x="-50%" y="-50%" width="200%" height="200%">` +
+      `<feGaussianBlur in="SourceAlpha" stdDeviation="${fmt(Math.max(shadow.blur / 2, 0))}"/>` +
+      `<feOffset dx="${fmt(dx)}" dy="${fmt(dy)}" result="ppshadow"/>` +
+      `<feFlood flood-color="${escapeXml(color)}"/>` +
+      `<feComposite in2="ppshadow" operator="in"/>` +
+      `<feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>` +
+      `</filter>`,
+  );
+  return ` filter="url(#${id})"`;
+}
+
+/** Marker content per arrowhead kind, drawn in an 8x8 box pointing +x. */
+function markerContent(kind: Exclude<ArrowheadKind, 'none'>, color: string): string {
+  switch (kind) {
+    case 'arrow':
+      return `<path d="M0 0 L8 4 L0 8" fill="none" stroke="${color}" stroke-width="1.5"/>`;
+    case 'triangle':
+      return `<path d="M0 0 L8 4 L0 8 Z" fill="${color}"/>`;
+    case 'stealth':
+      return `<path d="M0 0 L8 4 L0 8 L3 4 Z" fill="${color}"/>`;
+    case 'diamond':
+      return `<path d="M4 0 L8 4 L4 8 L0 4 Z" fill="${color}"/>`;
+    case 'oval':
+      return `<circle cx="4" cy="4" r="3.5" fill="${color}"/>`;
+  }
+}
+
+/**
+ * Push an arrowhead <marker> def and return its id, or undefined for 'none'.
+ * The marker points along +x and uses auto-start-reverse so the same def
+ * works for both marker-start and marker-end.
+ */
+export function arrowMarkerId(
+  kind: ArrowheadKind | undefined,
+  color: string,
+  ctx: RenderContext,
+): string | undefined {
+  if (!kind || kind === 'none') {
+    return undefined;
+  }
+  const id = ctx.nextId('marker');
+  ctx.defs.push(
+    `<marker id="${id}" markerWidth="10" markerHeight="10" refX="7" refY="4"` +
+      ` orient="auto-start-reverse" markerUnits="strokeWidth">` +
+      `${markerContent(kind, escapeXml(color))}</marker>`,
+  );
+  return id;
 }
 
 /**
