@@ -83,20 +83,20 @@ describe('EditorState: element insertion', () => {
 
   it('inserts each element kind with the right type, centered on the slide', () => {
     const state = fresh();
-    const kinds: [string, () => { type: string; transform: { x: number; width: number } }][] = [
+    const kinds = [
       ['textbox', () => state.insertTextBox('Hi')],
       ['picture', () => state.insertPicture('img.png')],
       ['table', () => state.insertTable(2, 2)],
       ['chart', () => state.insertChart('pie')],
       ['line', () => state.insertLine()],
-    ];
+    ] as const;
     for (const [type, insert] of kinds) {
       const el = insert();
       expect(el.type).toBe(type);
       expect(el.transform.x).toBeCloseTo(
         (state.presentation.slideSize.width - el.transform.width) / 2,
       );
-      expect(state.selection.elementIds).toEqual([(el as { id: string } & object).id]);
+      expect(state.selection.elementIds).toEqual([el.id]);
     }
   });
 
