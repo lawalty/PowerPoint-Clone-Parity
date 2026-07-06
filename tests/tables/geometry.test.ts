@@ -44,7 +44,8 @@ describe('geometry', () => {
   it('hitTestCell finds cells and returns null outside', () => {
     const t = createTable(3, 3, { x: 10, y: 20, width: 300, height: 90 });
     expect(hitTestCell(t, { x: 60, y: 35 })).toEqual({ row: 0, col: 0 });
-    expect(hitTestCell(t, { x: 250, y: 85 })).toEqual({ row: 2, col: 1 });
+    expect(hitTestCell(t, { x: 150, y: 85 })).toEqual({ row: 2, col: 1 });
+    expect(hitTestCell(t, { x: 250, y: 45 })).toEqual({ row: 0, col: 2 });
     expect(hitTestCell(t, { x: 9.99, y: 30 })).toBeNull();
     expect(hitTestCell(t, { x: 311, y: 30 })).toBeNull();
     expect(hitTestCell(t, { x: 50, y: 110.5 })).toBeNull();
